@@ -1,10 +1,5 @@
-import Layout from '@/components/Layout'
-import Dashboard from '@/components/Dashboard'
+import HouseholdBudget from '@/components/HouseholdBudget'
 
 export default function HomePage() {
-  return (
-    <Layout title="ダッシュボード">
-      <Dashboard />
-    </Layout>
-  )
+  return <HouseholdBudget />
 }

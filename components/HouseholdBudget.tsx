@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { transactionApi, Transaction as ApiTransaction, CreateTransactionData } from '@/lib/api';
 import {
   Box,
   Container,
@@ -18,6 +19,7 @@ import {
   Paper,
   Divider,
   Stack,
+  CircularProgress,
 } from '@mui/material';
 // Using Box with flexbox instead of Grid for better compatibility
 import {
@@ -30,14 +32,8 @@ import {
   CalendarToday as CalendarIcon,
 } from '@mui/icons-material';
 
-interface Transaction {
-  id: number;
-  type: 'income' | 'expense';
-  amount: number;
-  category: string;
-  memo: string;
-  date: string;
-}
+// Use the API Transaction type
+type Transaction = ApiTransaction;
 
 interface FormData {
   type: 'income' | 'expense';
@@ -51,6 +47,7 @@ const HouseholdBudget = () => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   const [formData, setFormData] = useState<FormData>({
     type: 'expense',
@@ -63,35 +60,59 @@ const HouseholdBudget = () => {
   const expenseCategories = ['食費', '交通費', '娯楽', '日用品', '光熱費', '医療費', 'その他'];
   const incomeCategories = ['給与', 'ボーナス', '副収入', 'その他'];
 
+  // データベースからトランザクションを取得
+  const fetchTransactions = async () => {
+    try {
+      setIsLoading(true);
+      const data = await transactionApi.getAll();
+      setTransactions(data);
+    } catch (error) {
+      console.error('Failed to fetch transactions:', error);
+      // エラーハンドリング - アラートでユーザーに通知
+      alert('取引データの取得に失敗しました');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const initialData: Transaction[] = [
-      { id: 1, type: 'income', amount: 250000, category: '給与', memo: '基本給', date: '2024-09-01' },
-      { id: 2, type: 'expense', amount: 3500, category: '食費', memo: 'スーパー', date: '2024-09-10' },
-      { id: 3, type: 'expense', amount: 1200, category: '交通費', memo: '電車代', date: '2024-09-11' },
-      { id: 4, type: 'expense', amount: 2800, category: '娯楽', memo: '映画', date: '2024-09-12' }
-    ];
-    setTransactions(initialData);
+    fetchTransactions();
   }, []);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!formData.amount || !formData.category) {
       alert('金額とカテゴリは必須です');
       return;
     }
 
-    const newTransaction: Transaction = {
-      id: editingTransaction ? editingTransaction.id : Date.now(),
-      ...formData,
-      amount: parseFloat(formData.amount)
-    };
+    try {
+      setIsLoading(true);
 
-    if (editingTransaction) {
-      setTransactions(prev => prev.map(t => t.id === editingTransaction.id ? newTransaction : t));
-    } else {
-      setTransactions(prev => [...prev, newTransaction]);
+      const transactionData: CreateTransactionData = {
+        type: formData.type,
+        amount: parseFloat(formData.amount),
+        category: formData.category,
+        memo: formData.memo,
+        date: formData.date
+      };
+
+      if (editingTransaction) {
+        // 更新
+        await transactionApi.update(editingTransaction.id, transactionData);
+      } else {
+        // 新規作成
+        await transactionApi.create(transactionData);
+      }
+
+      // データを再取得
+      await fetchTransactions();
+      resetForm();
+    } catch (error) {
+      console.error('Failed to save transaction:', error);
+      alert('取引の保存に失敗しました');
+    } finally {
+      setIsLoading(false);
     }
-
-    resetForm();
   };
 
   const resetForm = () => {
@@ -106,16 +127,28 @@ const HouseholdBudget = () => {
     setEditingTransaction(null);
   };
 
-  const deleteTransaction = (id: number) => {
+  const deleteTransaction = async (id: number) => {
     if (confirm('この取引を削除しますか？')) {
-      setTransactions(prev => prev.filter(t => t.id !== id));
+      try {
+        setIsLoading(true);
+        await transactionApi.delete(id);
+        await fetchTransactions();
+      } catch (error) {
+        console.error('Failed to delete transaction:', error);
+        alert('取引の削除に失敗しました');
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 
   const editTransaction = (transaction: Transaction) => {
     setFormData({
-      ...transaction,
-      amount: transaction.amount.toString()
+      type: transaction.type,
+      amount: transaction.amount.toString(),
+      category: transaction.category,
+      memo: transaction.memo || '',
+      date: new Date(transaction.date).toISOString().split('T')[0]
     });
     setEditingTransaction(transaction);
     setShowAddForm(true);
@@ -126,7 +159,10 @@ const HouseholdBudget = () => {
   const balance = totalIncome - totalExpense;
 
   const currentMonth = new Date().toISOString().substring(0, 7);
-  const thisMonthTransactions = transactions.filter(t => t.date.startsWith(currentMonth));
+  const thisMonthTransactions = transactions.filter(t => {
+    const transactionDate = new Date(t.date).toISOString().substring(0, 7);
+    return transactionDate === currentMonth;
+  });
   const thisMonthIncome = thisMonthTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
   const thisMonthExpense = thisMonthTransactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
 
@@ -302,9 +338,14 @@ const HouseholdBudget = () => {
                 <Button
                   variant="contained"
                   onClick={handleSubmit}
+                  disabled={isLoading}
                   sx={{ textTransform: 'none' }}
                 >
-                  {editingTransaction ? '更新' : '追加'}
+                  {isLoading ? (
+                    <CircularProgress size={20} color="inherit" />
+                  ) : (
+                    editingTransaction ? '更新' : '追加'
+                  )}
                 </Button>
                 <Button
                   variant="outlined"
@@ -358,7 +399,7 @@ const HouseholdBudget = () => {
                             {transaction.category}
                           </Typography>
                           <Typography variant="body2" color="text.secondary">
-                            {transaction.date}
+                            {new Date(transaction.date).toLocaleDateString('ja-JP')}
                           </Typography>
                         </Box>
                         {transaction.memo && (
